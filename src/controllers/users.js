@@ -1,57 +1,88 @@
 const User = require('../models/users');
-// import {hashPassword} from './bcrypt';
+const Role = require('../models/roles');
 
-const bcrypt = require('./bcrypt');
-
+const bcrypt = require('../services/bcrypt');
+const jwt = require('jsonwebtoken');
+const getToken = require('../services/get-token');
 
 exports.createUser = async (req, res) =>{
-    console.log(req.body)
-    
-    const {username, password} = req.body;
-    
+    req.body.password = await bcrypt.hashPassword(req.body.password);
     const user = new User({
-        username,
-        password: await bcrypt.hashPassword(password) 
+        ...req.body
     });
     try {
-        await user.save()
-        res.status(201).send(user)
+        await user.save();
+        await Role.updateOne({_id: req.body.roleId},{$push:{users: user.id}});
+        res.status(201).send({id: user.id,username: user.username});
     } catch (e) {
-        res.status(400).send({message: "Error"})
+        console.log(e)
+        res.status(400).send({message: 'User are exist or missed fill!'});
     }
 }
+
 exports.getUser = async (req, res) =>{
+    const levelUser = await getToken.getLevel(req.headers.authorization);
     try{
-        const users = await User.find();
-        res.send(users)
+        const users = await User.find().select('username').populate('role');
+        
+        var showDataId = [];
+        users.forEach(element => {
+            let level = element.role.level;
+            if(levelUser <= level){
+                showDataId.push(element.id)
+            }
+        });
+        const limit = +req.query.limit || 5;
+        const offset= +req.query.offset || 0;
+        const user = await User.find().select('username').where({_id: showDataId}).limit(limit).skip(offset).populate({path: 'role', select: 'name'});
+        const total = user.length;
+        const data = user.slice(offset, limit + offset);
+
+        // const users = await User.find({  role: { $ne: null } }).select('username').populate({
+        //     path:'role',select: 'name', match: { level: { $gte: levelUser} }
+        // });
+        // const limit = +req.query.limit || 5;
+        // const offset= +req.query.offset || 0;
+        // const total = users.length;
+        // const data = users.slice(offset, limit + offset);
+        
+        res.send({
+            data: data,
+            metadata:{
+                limit: limit, offset: offset, total: total
+            }
+        });
     } catch(e){
-        res.send(e)
+        res.status(400).send({message: "Error !", error: e})
     }
 }
+
 exports.getUserById = async (req, res) =>{
-    const id = req.params.id;
     try{
-        const user = await User.findById(id);
+        const user = await User.findById(req.params.id).populate('roleId');
         res.send(user)
     } catch(e){
-        res.send({message: `User Id ${id} not found`})
+        res.status(400).send({message: `User Id ${req.params.id} not found`})
     }
 }
+
 exports.updateUser = async (req, res) =>{
-    const id = req.params.id;
     try{
-        await User.update({_id: id}, req.body);
+        await User.update({_id: req.params.id}, req.body);
         res.status(200).send({message: "Updated !"})
     } catch(e){
-        res.status(400).send({message: "bad request"})
+        res.status(400).send({message: "Bad request"});
     }
 }
+
 exports.deleteUser = async (req, res) => {
-    const id = req.params.id;
     try{
-        await User.deleteOne({_id: id})
+        const isDeleted = await User.deleteOne({_id: req.params.id});
+        if(isDeleted.n === 0){
+            return res.status(400).send({message: "Not Found!"});
+        }
         res.status(200).send({message: "Deleted !"})
     }catch(e){
-        res.status(400).send(e)
+        return res.status(404).send({message: 'Not Found !',error: e});
     }
 }
